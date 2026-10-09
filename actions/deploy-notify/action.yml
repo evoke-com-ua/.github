@@ -1,0 +1,48 @@
+name: Deploy notify
+description: One Slack message per deploy run, edited when it ends; a failure is replied in its thread with mentions.
+
+inputs:
+  phase:
+    description: "start: post the message; finish: edit it with the outcome"
+    required: true
+  slack-token:
+    description: Bot token with chat:write, users:read, users:read.email
+    required: true
+  ts:
+    description: "finish: the message to edit (start's ts output); empty posts a new one"
+    default: ""
+  body:
+    description: "finish: the message's second line (start's body output); empty rebuilds it"
+    default: ""
+  needs:
+    description: "finish: toJSON(needs) of the calling job; the outcome is read from its build and deploy"
+    default: "{}"
+  github-token:
+    description: Token for the GitHub API (actions, contents and pull-requests read)
+    default: ${{ github.token }}
+
+outputs:
+  ts:
+    description: The Slack message timestamp
+    value: ${{ steps.notify.outputs.ts }}
+  body:
+    description: The message's second line, reused by finish
+    value: ${{ steps.notify.outputs.body }}
+
+runs:
+  using: composite
+  steps:
+    - id: notify
+      uses: actions/github-script@v9
+      env:
+        PHASE: ${{ inputs.phase }}
+        SLACK_TOKEN: ${{ inputs.slack-token }}
+        SLACK_TS: ${{ inputs.ts }}
+        SLACK_BODY: ${{ inputs.body }}
+        NEEDS: ${{ inputs.needs }}
+        ACTION_PATH: ${{ github.action_path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const notify = require(`${process.env.ACTION_PATH}/notify.js`)
+          await notify({ github, context, core })

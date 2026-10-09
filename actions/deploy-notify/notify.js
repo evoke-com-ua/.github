@@ -1,6 +1,13 @@
 const SLACK = 'https://slack.com/api/'
 const TIMEOUT = 10000
 
+const STATES = {
+  start: { icon: '🟡', label: 'Deploying', color: '#ecb22e' },
+  success: { icon: '✅', label: 'Deployed', color: '#2eb67d' },
+  failure: { icon: '❌', label: 'Deploy failed', color: '#e01e5a' },
+  cancelled: { icon: '⚪', label: 'Deploy cancelled', color: '#9e9ea6' },
+}
+
 module.exports = async ({ github, context, core }) => {
   try {
     await run({ github, context, core })
@@ -30,10 +37,10 @@ async function run({ github, context, core }) {
     return json
   }
 
-  // Read methods take form parameters, not JSON.
-  const lookupByEmail = async (email) => {
+  // Read methods take query parameters, not JSON; a miss is not an error.
+  const slackUser = async (method, params) => {
     try {
-      const res = await fetch(`${SLACK}users.lookupByEmail?email=${encodeURIComponent(email)}`, {
+      const res = await fetch(`${SLACK}${method}?${new URLSearchParams(params)}`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(TIMEOUT),
       })
@@ -57,10 +64,11 @@ async function run({ github, context, core }) {
   const sha = context.sha
   const short = sha.slice(0, 7)
   const branch = context.ref.replace(/^refs\/heads\//, '')
-  const app = e.DEPLOY_APP || repo
-  const envName = e.DEPLOY_ENV || branch
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const app = esc(e.DEPLOY_APP || repo)
+  const envName = esc(e.DEPLOY_ENV || branch)
   const site = e.DEPLOY_URL || ''
-  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const host = site.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
   const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: sha })
   const commitAuthor = {
@@ -71,48 +79,68 @@ async function run({ github, context, core }) {
   const manual = context.eventName === 'workflow_dispatch'
   const starter = manual ? { login: context.actor } : commitAuthor
 
-  // Mentions ping; the running message names people, only a failure reply mentions them.
+  // The Slack name is shown everywhere; only a failure reply mentions (pings) people.
   const resolve = async (p) => {
     let user = null
-    if (p.email && !p.email.endsWith('@users.noreply.github.com')) user = await lookupByEmail(p.email)
+    if (p.email && !p.email.endsWith('@users.noreply.github.com')) user = await slackUser('users.lookupByEmail', { email: p.email })
     const id = user?.id || (p.login && userMap[p.login]) || null
+    if (id && !user) user = await slackUser('users.info', { user: id })
     const name = user?.profile?.display_name || user?.real_name || p.name || p.login || 'unknown'
     return { key: id || p.login || p.email, id, name, mention: id ? `<@${id}>` : p.login || name }
   }
 
-  const header = (icon, text, tail = '') => `${icon} ${text} · *${app}* → ${envName}${tail}`
-
-  const buildBody = async () => {
-    const who = await resolve(starter)
-    const title = esc(commit.commit.message.split('\n')[0].slice(0, 120))
-    let changes = ''
+  // Where the commit came from: its merged pull request, else GitHub's merge message, else the commit itself.
+  const source = async () => {
+    const [subject, ...rest] = commit.commit.message.split('\n')
+    let pr = null
     try {
-      const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: context.runId })
-      const { data: prev } = await github.rest.actions.listWorkflowRuns({
-        owner, repo, workflow_id: run.workflow_id, branch, status: 'success', per_page: 10,
-      })
-      const last = prev.workflow_runs.find((r) => r.id !== run.id && r.head_sha !== sha)
-      if (last) {
-        const { data: cmp } = await github.rest.repos.compareCommitsWithBasehead({
-          owner, repo, basehead: `${last.head_sha}...${sha}`,
-        })
-        const n = cmp.total_commits
-        changes = ` · <${repoUrl}/compare/${last.head_sha.slice(0, 7)}...${short}|${n} commit${n === 1 ? '' : 's'} since last deploy>`
-      }
+      const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha })
+      pr = prs.find((p) => p.merge_commit_sha === sha) || prs.find((p) => p.merged_at) || null
     } catch (err) {
-      core.info(`no change summary: ${err.message}`)
+      core.info(`no pull request: ${err.message}`)
     }
-    const via = manual ? ' (manual run)' : ''
-    return `${esc(who.name)}${via} · ${esc(branch)} · <${repoUrl}/commit/${sha}|${short}> ${title}${changes} · <${runUrl}|run>`
+    if (pr) return { pr, number: pr.number, from: pr.head.ref, title: pr.title }
+    const merge = subject.match(/^Merge pull request #(\d+) from [^/\s]+\/(\S+)/)
+    if (merge) return { number: +merge[1], from: merge[2], title: rest.find((l) => l.trim()) || subject }
+    const squash = subject.match(/^(.*) \(#(\d+)\)$/)
+    if (squash) return { number: +squash[2], title: squash[1] }
+    return { title: subject }
+  }
+
+  // The parts of the message that don't change when the run ends; passed from start to finish.
+  const buildView = async (src) => {
+    const who = await resolve(starter)
+    const pr = src.number ? `<${repoUrl}/pull/${src.number}|#${src.number}> ` : ''
+    return {
+      branch: `🌿 \`${esc(branch)}\`${src.from ? ` ← \`${esc(src.from)}\`` : ''}${manual ? ' · manual run' : ''}`,
+      title: pr + esc(src.title.trim().slice(0, 150)),
+      who: esc(who.name),
+    }
+  }
+
+  const message = (state, view, tail = '') => {
+    const { icon, label, color } = STATES[state]
+    const meta = [view.who, `<${repoUrl}/commit/${sha}|${short}>`, `<${runUrl}|View run>`]
+    if (state === 'success' && site) meta.push(`<${site}|${host}>`)
+    return {
+      text: `${icon} *${label}* · *${app}* · *${envName}*${tail}`,
+      attachments: [{
+        color,
+        blocks: [
+          { type: 'section', text: { type: 'mrkdwn', text: `${view.branch}\n${view.title}` } },
+          { type: 'context', elements: [{ type: 'mrkdwn', text: meta.join(' · ') }] },
+        ],
+      }],
+      unfurl_links: false,
+      unfurl_media: false,
+    }
   }
 
   if (e.PHASE === 'start') {
-    const body = await buildBody()
-    const res = await slack('chat.postMessage', {
-      channel, text: `${header('🟡', 'Deploying')}\n${body}`, unfurl_links: false, unfurl_media: false,
-    })
+    const view = await buildView(await source())
+    const res = await slack('chat.postMessage', { channel, ...message('start', view) })
     core.setOutput('ts', res.ts)
-    core.setOutput('body', body)
+    core.setOutput('body', JSON.stringify(view))
     return
   }
 
@@ -125,21 +153,21 @@ async function run({ github, context, core }) {
   const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: context.runId })
   const secs = Math.max(0, Math.round((Date.now() - new Date(run.run_started_at).getTime()) / 1000))
   const took = secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`
-  const host = site.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
-  const first = {
-    success: header('✅', 'Deployed', ` · ${took}${site ? ` · <${site}|${host}>` : ''}`),
-    failure: header('❌', 'Deploy failed', ` · ${took}`),
-    cancelled: header('⚪', 'Deploy cancelled', ` · ${took}`),
-  }[outcome]
+  // A start from before this format passed a plain text line; rebuild in that case.
+  let view = null
+  try {
+    view = JSON.parse(e.SLACK_BODY)
+  } catch {}
+  const src = !view?.branch || outcome === 'failure' ? await source() : null
+  if (!view?.branch) view = await buildView(src)
 
-  const body = e.SLACK_BODY || (await buildBody())
-  const text = `${first}\n${body}`
+  const msg = message(outcome, view, ` · ${took}`)
   let ts = e.SLACK_TS
   if (ts) {
-    await slack('chat.update', { channel, ts, text })
+    await slack('chat.update', { channel, ts, text: msg.text, attachments: msg.attachments })
   } else {
-    ts = (await slack('chat.postMessage', { channel, text, unfurl_links: false, unfurl_media: false })).ts
+    ts = (await slack('chat.postMessage', { channel, ...msg })).ts
   }
   core.setOutput('ts', ts)
 
@@ -164,17 +192,16 @@ async function run({ github, context, core }) {
 
   const people = [starter]
   if (manual) people.push(commitAuthor)
-  try {
-    const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: sha })
-    const pr = prs.find((p) => p.merged_at) || prs[0]
-    if (pr) {
-      const login = pr.user.login
-      const { data: commits } = await github.rest.pulls.listCommits({ owner, repo, pull_number: pr.number, per_page: 100 })
-      const own = commits.find((c) => c.author?.login === login)
-      people.push({ login, email: own?.commit.author?.email })
+  if (src.pr) {
+    const login = src.pr.user.login
+    let email
+    try {
+      const { data: commits } = await github.rest.pulls.listCommits({ owner, repo, pull_number: src.pr.number, per_page: 100 })
+      email = commits.find((c) => c.author?.login === login)?.commit.author?.email
+    } catch (err) {
+      core.info(`no pull request author email: ${err.message}`)
     }
-  } catch (err) {
-    core.info(`no pull request author: ${err.message}`)
+    people.push({ login, email })
   }
 
   const seen = new Set()
@@ -192,6 +219,6 @@ async function run({ github, context, core }) {
     thread_ts: ts,
     reply_broadcast: true,
     unfurl_links: false,
-    text: `❌ Failed at *${esc(where)}*. The previous version keeps serving. ${mentions.join(' ')} · <${logs}|logs>`,
+    text: `❌ Failed at *${esc(where)}*. The previous version keeps serving.\n${mentions.join(' ')} · <${logs}|View logs>`,
   })
 }

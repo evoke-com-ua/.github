@@ -5,25 +5,38 @@ Shared CI pieces for the organisation's repositories.
 ## `actions/deploy-notify`
 
 Posts one Slack message per deploy run in `#ci-cd` and edits it when the run ends.
+The first line is the message; the rest sits beside a coloured bar (yellow, green,
+red, grey):
 
 ```
-🟡 Deploying · lms-en-app-v1 → dev
-Pasha · develop · a1b2c3d Fix login redirect · 3 commits since last deploy · run
+🟡 Deploying · lms-en-app-v1 · dev
+┃ 🌿 develop ← feature/ci-slack-notify
+┃ #83 Post every deploy to Slack #ci-cd
+┃ Pavlo Kapustin · 76817b3 · View run
 ```
 
 becomes one of
 
 ```
-✅ Deployed · lms-en-app-v1 → dev · 3m 41s · admin-dev.evoke.com.ua
-❌ Deploy failed · lms-en-app-v1 → dev · 2m 05s
-⚪ Deploy cancelled · lms-en-app-v1 → dev · 0m 40s
+✅ Deployed · lms-en-app-v1 · dev · 3m 41s          (… · admin-dev.evoke.com.ua on the last line)
+❌ Deploy failed · lms-en-app-v1 · dev · 2m 05s
+⚪ Deploy cancelled · lms-en-app-v1 · dev · 0m 40s
 ```
+
+- **Branch and title** come from the merged pull request (`#83` links to it): the
+  target branch ← the PR's branch, and the PR title, never GitHub's "Merge pull
+  request …" line. Without access to the PR, the merge message is parsed instead
+  (a squash merge then shows the number and title but not the PR's branch). A
+  direct push shows the branch and the commit title; a manual run adds "manual run".
+- **The name** is the person's Slack name (display name, else full name), found by
+  email or through `SLACK_USER_MAP`; it is plain text and doesn't ping.
 
 A failure also gets a thread reply, broadcast to the channel, because editing a
 message notifies nobody:
 
 ```
-❌ Failed at deploy / deploy lms-api. The previous version keeps serving. @Pasha @Yulia · logs
+❌ Failed at deploy / deploy lms-api. The previous version keeps serving.
+@Pavlo Kapustin @Yulia · View logs
 ```
 
 - **Who is mentioned** (failures only): the person who started the run (the

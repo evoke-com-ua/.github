@@ -1,0 +1,73 @@
+name: release
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: branch name and version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          n='(0|[1-9][0-9]*)'
+          [[ "$HEAD_BRANCH" =~ ^(release|hotfix)/$n\.$n\.$n$ ]] ||
+            fail "PRs into main must come from release/X.Y.Z or hotfix/X.Y.Z, not '$HEAD_BRANCH'"
+          kind=${BASH_REMATCH[1]} major=${BASH_REMATCH[2]} minor=${BASH_REMATCH[3]} patch=${BASH_REMATCH[4]}
+
+          latest=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)
+          if [[ -z "$latest" ]]; then
+            echo "No version tag yet: v$major.$minor.$patch will be the first."
+            exit 0
+          fi
+          IFS=. read -r lmajor lminor lpatch <<< "$latest"
+
+          if [[ $kind == hotfix ]]; then
+            (( major == lmajor && minor == lminor && patch > lpatch )) ||
+              fail "The latest version is v$latest, so a hotfix must be v$lmajor.$lminor.$((lpatch + 1)) (a higher patch, same major.minor)"
+          else
+            (( patch == 0 && (major > lmajor || (major == lmajor && minor > lminor)) )) ||
+              fail "The latest version is v$latest, so a release must be v$lmajor.$((lminor + 1)).0 or v$((lmajor + 1)).0.0"
+          fi
+          echo "v$major.$minor.$patch follows v$latest."
+
+  publish:
+    if: github.event.action == 'closed' && github.event.pull_request.merged
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_BRANCH" =~ ^(release|hotfix)/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::warning::'$HEAD_BRANCH' is not a release or hotfix branch; no version created"
+            exit 0
+          fi
+          kind=${BASH_REMATCH[1]} tag="v${BASH_REMATCH[2]}"
+
+          previous=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+
+          args=(--repo "$REPO" --target "$SHA" --title "$tag" --generate-notes)
+          [[ -n "$previous" ]] && args+=(--notes-start-tag "$previous")
+          [[ $kind == hotfix ]] &&
+            args+=(--notes "**Hotfix.** Make the same fix on \`stage\` (and on \`develop\` if it applies) as separate PRs.")
+
+          gh release create "$tag" "${args[@]}"
+          echo "Released $tag at ${SHA:0:7} (notes since ${previous:-the beginning})."

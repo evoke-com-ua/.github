@@ -112,3 +112,44 @@ jobs:
 ```
 
 `DEPLOY_APP` overrides the name shown (default: the repository name).
+
+## `.github/workflows/release.yml`
+
+Versions for `main`. A PR into `main` must come from `release/X.Y.Z` (cut from
+`stage`) or `hotfix/X.Y.Z` (cut from `main`); merging it creates the tag
+`vX.Y.Z` and a GitHub Release with notes generated since the previous tag.
+
+| Branch | Rule, against the latest `v*` tag |
+|---|---|
+| `release/X.Y.0` | a higher minor (`0.1.0` → `0.2.0`) or major (`→ 1.0.0`), patch `0` |
+| `hotfix/X.Y.Z` | same major.minor, a higher patch (`0.2.0` → `0.2.1`) |
+
+- **`check`** runs on every PR into `main` and blocks a wrong branch name or
+  version. It is the required status check `release / check` in the repo's
+  "main release" ruleset, which also allows merge commits only (squash would
+  lose the branch name).
+- **`publish`** runs when the PR is merged: `gh release create` on the merge
+  commit. A hotfix release reminds to make the same fix on `stage` (and
+  `develop` if it applies) as separate PRs.
+- A push of a tag deploys nothing; the prod deploy still runs from the push to
+  `main`.
+
+### Use in a repository
+
+`.github/workflows/release.yml` on `stage` and `develop` (release branches are
+cut from `stage`, and a PR runs the workflow from its own branch):
+
+```yaml
+name: release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, edited, closed]
+
+jobs:
+  release:
+    uses: evoke-com-ua/.github/.github/workflows/release.yml@main
+    permissions:
+      contents: write
+```

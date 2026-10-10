@@ -1,0 +1,121 @@
+name: Release LMS
+run-name: "Release LMS · ${{ inputs.kind }} · ${{ inputs.repos }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "release-minor / release-major (from stage) or hotfix (from main)"
+        type: choice
+        options: [release-minor, release-major, hotfix]
+      repos:
+        description: "Repos to ship; with both, the backend deploys first"
+        type: choice
+        options: [both, app, web]
+        default: both
+      version:
+        description: "Optional, e.g. 0.3.0. Empty: the next version is computed"
+        type: string
+        required: false
+      skip-backup:
+        description: "Skip the database backup before the backend deploy (only if DevOps hasn't set it up yet)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-lms
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SLACK_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+  SLACK_CHANNEL: ${{ vars.SLACK_CHANNEL_CICD }}
+  SLACK_USER_MAP: ${{ vars.SLACK_USER_MAP }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      state: ${{ steps.run.outputs.state }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: evoke-com-ua
+          repositories: lms-en-app-v1,lms-en-web-v1
+      - id: run
+        uses: actions/github-script@v9
+        env:
+          PHASE: prepare
+          KIND: ${{ inputs.kind }}
+          REPOS: ${{ inputs.repos }}
+          VERSION: ${{ inputs.version }}
+          SKIP_BACKUP: ${{ inputs.skip-backup }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          script: await require(`${process.env.GITHUB_WORKSPACE}/actions/release-lms/release.js`)({ github, context, core })
+
+  open-prs:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release-branches
+    outputs:
+      state: ${{ steps.run.outputs.state }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: evoke-com-ua
+          repositories: lms-en-app-v1,lms-en-web-v1
+      - id: run
+        uses: actions/github-script@v9
+        env:
+          PHASE: open-prs
+          STATE: ${{ needs.prepare.outputs.state }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          script: await require(`${process.env.GITHUB_WORKSPACE}/actions/release-lms/release.js`)({ github, context, core })
+
+  ship:
+    needs: open-prs
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: evoke-com-ua
+          repositories: lms-en-app-v1,lms-en-web-v1
+      - id: run
+        uses: actions/github-script@v9
+        env:
+          PHASE: ship
+          STATE: ${{ needs.open-prs.outputs.state }}
+        with:
+          github-token: ${{ steps.token.outputs.token }}
+          script: await require(`${process.env.GITHUB_WORKSPACE}/actions/release-lms/release.js`)({ github, context, core })
+
+  cancelled:
+    needs: [prepare, open-prs, ship]
+    if: always() && needs.prepare.result == 'success' && (needs.open-prs.result != 'success' || needs.ship.result == 'skipped' || needs.ship.result == 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/github-script@v9
+        env:
+          PHASE: cancel
+          STATE: ${{ needs.open-prs.outputs.state || needs.prepare.outputs.state }}
+        with:
+          script: await require(`${process.env.GITHUB_WORKSPACE}/actions/release-lms/release.js`)({ github, context, core })

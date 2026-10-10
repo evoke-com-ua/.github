@@ -28,6 +28,12 @@ becomes one of
   request …" line. Without access to the PR, the merge message is parsed instead
   (a squash merge then shows the number and title but not the PR's branch). A
   direct push shows the branch and the commit title; a manual run adds "manual run".
+- **Releases on `main`** (deployed from `release/X.Y.Z` or `hotfix/X.Y.Z`, see
+  `release.yml` below) are marked: a purple bar while running,
+  `🚀 Releasing v0.1.0` → `🚀 Released v0.1.0` with a *Release notes* link,
+  `🩹 Deploying hotfix v0.1.1` → `🩹 Hotfix v0.1.1 deployed`, and
+  `❌ Release v0.1.0 failed` / `⚪ … cancelled`. The version comes from the branch
+  name, so the message doesn't wait for the release job.
 - **The name** is the person's Slack name (display name, else full name), found by
   email or through `SLACK_USER_MAP`; it is plain text and doesn't ping.
 

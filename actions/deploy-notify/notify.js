@@ -8,6 +8,20 @@ const STATES = {
   cancelled: { icon: '⚪', label: 'Deploy cancelled', color: '#9e9ea6' },
 }
 
+const RELEASES = {
+  release: {
+    icon: '🚀',
+    label: { start: 'Releasing', success: 'Released', failure: 'Release', cancelled: 'Release' },
+    suffix: { failure: ' failed', cancelled: ' cancelled' },
+  },
+  hotfix: {
+    icon: '🩹',
+    label: { start: 'Deploying hotfix', success: 'Hotfix', failure: 'Hotfix', cancelled: 'Hotfix' },
+    suffix: { success: ' deployed', failure: ' failed', cancelled: ' cancelled' },
+  },
+}
+const RELEASE_COLOR = '#7c3aed'
+
 module.exports = async ({ github, context, core }) => {
   try {
     await run({ github, context, core })
@@ -111,7 +125,9 @@ async function run({ github, context, core }) {
   const buildView = async (src) => {
     const who = await resolve(starter)
     const pr = src.number ? `<${repoUrl}/pull/${src.number}|#${src.number}> ` : ''
+    const rel = branch === 'main' && src.from?.match(/^(release|hotfix)\/(\d+\.\d+\.\d+)$/)
     return {
+      release: rel ? { kind: rel[1], tag: `v${rel[2]}` } : null,
       branch: `🌿 \`${esc(branch)}\`${src.from ? ` ← \`${esc(src.from)}\`` : ''}${manual ? ' · manual run' : ''}`,
       title: pr + esc(src.title.trim().slice(0, 150)),
       who: esc(who.name),
@@ -119,7 +135,16 @@ async function run({ github, context, core }) {
   }
 
   const message = (state, view, tail = '') => {
-    const { icon, label, color } = STATES[state]
+    let { icon, label, color } = STATES[state]
+    let title = view.title
+    const rel = view.release
+    if (rel) {
+      const r = RELEASES[rel.kind]
+      if (state === 'start' || state === 'success') icon = r.icon
+      if (state === 'start') color = RELEASE_COLOR
+      label = `${r.label[state]} ${rel.tag}${r.suffix[state] || ''}`
+      if (state === 'success') title += ` · <${repoUrl}/releases/tag/${rel.tag}|Release notes>`
+    }
     const meta = [view.who, `<${repoUrl}/commit/${sha}|${short}>`, `<${runUrl}|View run>`]
     if (state === 'success' && site) meta.push(`<${site}|${host}>`)
     return {
@@ -127,7 +152,7 @@ async function run({ github, context, core }) {
       attachments: [{
         color,
         blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: `${view.branch}\n${view.title}` } },
+          { type: 'section', text: { type: 'mrkdwn', text: `${view.branch}\n${title}` } },
           { type: 'context', elements: [{ type: 'mrkdwn', text: meta.join(' · ') }] },
         ],
       }],

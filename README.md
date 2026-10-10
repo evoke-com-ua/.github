@@ -205,9 +205,11 @@ The database is never restored automatically, and the backend is not rolled
 back when the frontend fails: migrations only add (see `migrations-check` in
 `lms-en-app-v1`), so the new backend works with the previous frontend.
 
-The merges carry `Release LMS: <run url>` in the commit message; `deploy-prod`
-skips that push (the code is already live) and `deploy-notify` stays silent.
-`release / publish` creates the tag and Release as for any release PR.
+The merges carry `Release LMS: <run url>` and `[skip actions]` in the commit
+message, so the push to `main` starts no workflow at all (the code is already
+live). The `Release LMS:` conditions in `deploy-prod` and `deploy-notify` stay
+as a safety net. `release / publish` runs on the PR being closed, not on the
+push, so it still creates the tag and Release.
 
 With the repository variable `RELEASE_APP_LOGIN` (the app's bot login) set in
 `lms-en-app-v1` and `lms-en-web-v1`, `release / check` refuses `release/` PRs

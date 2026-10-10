@@ -370,7 +370,7 @@ module.exports = async ({ github, context, core }) => {
       }
       await github.rest.pulls.merge({
         owner: OWNER, repo: r.name, pull_number: r.pr, merge_method: 'merge',
-        commit_message: `${MARKER} ${runUrl}`,
+        commit_message: `${MARKER} ${runUrl}\n[skip actions]`,
       })
       r.state = 'ok'
       await publish(s)

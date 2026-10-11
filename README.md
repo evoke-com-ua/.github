@@ -159,3 +159,73 @@ jobs:
     permissions:
       contents: write
 ```
+
+## `.github/workflows/release-lms.yml`: Release LMS
+
+One run ships `lms-en-app-v1` and/or `lms-en-web-v1` to prod. Actions →
+**Release LMS** → Run workflow:
+
+| Input | Values |
+|---|---|
+| `kind` | `release-minor`, `release-major` (branch from `stage`), `hotfix` (branch from `main`) |
+| `repos` | `both`, `app`, `web` |
+| `version` | empty = computed; or e.g. `0.5.0`, checked against the same rules |
+| `skip-backup` | skip the database backup (only until DevOps has set it up) |
+
+**Versions** are one line for the whole LMS. A release goes above the highest
+tag in either repo (web `v0.3.0` + app `v0.2.0` → next release `v0.4.0` for
+both). A hotfix stays on the shipped repo's `major.minor` and takes the next
+patch not used by either repo; `hotfix` + `both` needs both repos on the same
+line.
+
+1. **prepare**: version, branches, one Slack message in `#ci-cd`. Cherry-pick
+   onto the branches now if needed.
+2. **open-prs** (environment `release-branches` = *Continue*): PRs into `main`
+   opened by the EVOKE Release app, with their commits and **the migrations
+   that will run**. Review and approve them.
+3. **ship** (environment `production` = *Continue*):
+   1. every PR approved and mergeable, else stop (nothing built);
+   2. **build** both images in parallel (`deploy-prod.yml`, `mode: build`, on the
+      release branch); a failure stops, nothing deployed;
+   3. **back up** the prod database (`lms-en-app-v1` `deploy-prod.yml`,
+      `mode: backup`, runs `PROD_DB_BACKUP_COMMAND` from DevOps); a failure
+      stops, nothing deployed;
+   4. **deploy the backend** (`mode: deploy`; cord runs migrations, then the
+      health check), then **merge** its PR (tag + Release);
+   5. **deploy the frontend**, then merge its PR.
+4. **cancelled**: if a step is rejected; branches and PRs stay.
+
+| Fails at | Prod | Next |
+|---|---|---|
+| build or backup | unchanged | fix → *Re-run failed jobs* |
+| backend deploy | previous backend serving; migrations may have partly run | decide by hand: fix forward, or restore the pre-release backup only if data is damaged |
+| frontend deploy | new backend (compatible) + previous frontend | fix → *Re-run failed jobs*: merged repos are skipped |
+
+The database is never restored automatically, and the backend is not rolled
+back when the frontend fails: migrations only add (see `migrations-check` in
+`lms-en-app-v1`), so the new backend works with the previous frontend.
+
+The merges carry `Release LMS: <run url>` and `[skip actions]` in the commit
+message, so the push to `main` starts no workflow at all (the code is already
+live). The `Release LMS:` conditions in `deploy-prod` and `deploy-notify` stay
+as a safety net. `release / publish` runs on the PR being closed, not on the
+push, so it still creates the tag and Release.
+
+With the repository variable `RELEASE_APP_LOGIN` (the app's bot login) set in
+`lms-en-app-v1` and `lms-en-web-v1`, `release / check` refuses `release/` PRs
+not opened by the app. Hotfix PRs can still be opened by hand.
+
+### Setup
+
+- GitHub App **EVOKE Release** (Contents, Pull requests, Workflows, Actions:
+  read and write; Checks: read), installed on `lms-en-app-v1`, `lms-en-web-v1`
+  and this repo. Here: variable `RELEASE_APP_ID`, secret
+  `RELEASE_APP_PRIVATE_KEY`.
+- Environments here: `release-branches` and `production`, required reviewer
+  Pavel, *Prevent self-review* off.
+- `lms-en-app-v1`: variable `PROD_DB_BACKUP_COMMAND` (from DevOps).
+- Slack: the org secret `SLACK_BOT_TOKEN` and variables `SLACK_CHANNEL_CICD`,
+  `SLACK_USER_MAP` (CI_CD BOT), already shared with this repo.
+- `lms-en-app-v1` and `lms-en-web-v1` need `deploy-prod.yml` with the `mode`
+  input on the branch a release is cut from (`stage`; `main` for hotfixes after
+  the first release).

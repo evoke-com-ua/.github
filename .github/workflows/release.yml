@@ -15,6 +15,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_BRANCH: ${{ github.head_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          RELEASE_APP_LOGIN: ${{ vars.RELEASE_APP_LOGIN }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -23,6 +25,11 @@ jobs:
           [[ "$HEAD_BRANCH" =~ ^(release|hotfix)/$n\.$n\.$n$ ]] ||
             fail "PRs into main must come from release/X.Y.Z or hotfix/X.Y.Z, not '$HEAD_BRANCH'"
           kind=${BASH_REMATCH[1]} major=${BASH_REMATCH[2]} minor=${BASH_REMATCH[3]} patch=${BASH_REMATCH[4]}
+
+          # Set RELEASE_APP_LOGIN (e.g. evoke-release[bot]) once Release LMS works, to block hand-made releases.
+          if [[ $kind == release && -n "$RELEASE_APP_LOGIN" && "$PR_AUTHOR" != "$RELEASE_APP_LOGIN" ]]; then
+            fail "Releases go through Actions → Release LMS in evoke-com-ua/.github (this PR is by $PR_AUTHOR). Hotfix PRs can still be opened by hand."
+          fi
 
           latest=$(gh api "repos/$REPO/tags" --paginate --jq '.[].name' \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -V | tail -1 || true)

@@ -85,6 +85,10 @@ async function run({ github, context, core }) {
   const host = site.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
   const { data: commit } = await github.rest.repos.getCommit({ owner, repo, ref: sha })
+  if (/^Release LMS: /m.test(commit.commit.message)) {
+    core.info('Merged by a Release LMS run, which posts its own Slack message')
+    return
+  }
   const commitAuthor = {
     login: commit.author?.login,
     email: commit.commit.author?.email,

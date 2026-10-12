@@ -136,7 +136,8 @@ Versions for `main`. A PR into `main` must come from `release/X.Y.Z` (cut from
   lose the branch name).
 - **`publish`** runs when the PR is merged: `gh release create` on the merge
   commit. A hotfix release reminds to make the same fix on `stage` (and
-  `develop` if it applies) as separate PRs.
+  `develop` if it applies) as separate PRs. Then it deletes the release or
+  hotfix branch (a warning if it can't).
 - A push of a tag deploys nothing; the prod deploy still runs from the push to
   `main`.
 

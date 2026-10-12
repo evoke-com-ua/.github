@@ -78,3 +78,10 @@ jobs:
 
           gh release create "$tag" "${args[@]}"
           echo "Released $tag at ${SHA:0:7} (notes since ${previous:-the beginning})."
+
+          # The branch is fully in main and tagged; nothing builds from it any more.
+          if gh api -X DELETE "repos/$REPO/git/refs/heads/$HEAD_BRANCH" --silent; then
+            echo "Deleted $HEAD_BRANCH."
+          else
+            echo "::warning::Could not delete $HEAD_BRANCH; delete it by hand"
+          fi

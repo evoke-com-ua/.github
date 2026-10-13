@@ -202,7 +202,7 @@ async function run({ github, context, core }) {
 
   if (outcome !== 'failure') return
 
-  // An edit notifies nobody, so the failure goes out as a broadcast reply that mentions people.
+  // An edit notifies nobody, so the failure goes out as a thread reply that mentions people.
   let where = 'unknown step'
   let logs = runUrl
   try {
@@ -246,7 +246,6 @@ async function run({ github, context, core }) {
   await slack('chat.postMessage', {
     channel,
     thread_ts: ts,
-    reply_broadcast: true,
     unfurl_links: false,
     text: `❌ Failed at *${esc(where)}*. The previous version keeps serving.\n${mentions.join(' ')} · <${logs}|View logs>`,
   })

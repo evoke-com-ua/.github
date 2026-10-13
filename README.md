@@ -37,8 +37,8 @@ becomes one of
 - **The name** is the person's Slack name (display name, else full name), found by
   email or through `SLACK_USER_MAP`; it is plain text and doesn't ping.
 
-A failure also gets a thread reply, broadcast to the channel, because editing a
-message notifies nobody:
+A failure also gets a reply in the message's thread (not sent to the channel), which
+mentions the people below, because editing a message notifies nobody:
 
 ```
 ❌ Failed at deploy / deploy lms-api. The previous version keeps serving.

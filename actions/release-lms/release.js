@@ -171,7 +171,6 @@ module.exports = async ({ github, context, core }) => {
     if (s.ts) {
       await slack('chat.postMessage', {
         thread_ts: s.ts,
-        reply_broadcast: true,
         unfurl_links: false,
         text: `❌ Stopped${at ? ` at *${at}*` : ''}: ${esc(reason)}.${note ? ` ${note}` : ''}\n${id} · <${logs || runUrl}|View logs>`,
       })

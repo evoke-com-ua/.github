@@ -135,8 +135,8 @@ Versions for `main`. A PR into `main` must come from `release/X.Y.Z` (cut from
   "main release" ruleset, which also allows merge commits only (squash would
   lose the branch name).
 - **`publish`** runs when the PR is merged: `gh release create` on the merge
-  commit. A hotfix release reminds to make the same fix on `stage` (and
-  `develop` if it applies) as separate PRs. Then it deletes the release or
+  commit. A hotfix release notes that Release LMS opens a PR syncing it into
+  `stage`, and reminds to make the same fix on `develop` if it applies. Then it deletes the release or
   hotfix branch (a warning if it can't).
 - A push of a tag deploys nothing; the prod deploy still runs from the push to
   `main`.
@@ -193,7 +193,12 @@ line.
       stops, nothing deployed;
    4. **deploy the backend** (`mode: deploy`; cord runs migrations, then the
       health check), then **merge** its PR (tag + Release);
-   5. **deploy the frontend**, then merge its PR.
+   5. **deploy the frontend**, then merge its PR;
+   6. **sync `stage`**: if `main` now has files that differ from `stage` (a fix
+      made on the release branch, a hotfix, a direct edit on `main`), open
+      `sync/stage-from-vX.Y.Z` → `stage` with the list of files, linked in the
+      Slack message. Compared by content, since squash merges into `stage`
+      don't carry `main`'s commits. A failure here only changes the note.
 4. **cancelled**: if a step is rejected; branches and PRs stay.
 
 | Fails at | Prod | Next |

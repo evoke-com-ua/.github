@@ -162,6 +162,45 @@ module.exports = async ({ github, context, core }) => {
 
   const save = (s) => core.setOutput('state', JSON.stringify(s))
 
+  // What main has and stage doesn't (a fix on the release branch, a hotfix, a direct edit on main), as a PR into
+  // stage. Compared by file content: squash merges into stage never make main's commits ancestors of stage.
+  const syncStage = async (name, version) => {
+    const { data: cmp } = await github.rest.repos.compareCommitsWithBasehead({ owner: OWNER, repo: name, basehead: 'stage...main' })
+    const blobAt = async (path) => {
+      try {
+        return (await github.rest.repos.getContent({ owner: OWNER, repo: name, path, ref: 'stage' })).data.sha
+      } catch (err) {
+        if (err.status === 404) return null
+        throw err
+      }
+    }
+    const differ = []
+    for (const f of (cmp.files || []).slice(0, 100)) {
+      if (await blobAt(f.filename) !== (f.status === 'removed' ? null : f.sha)) differ.push(f.filename)
+      if (f.previous_filename && await blobAt(f.previous_filename) !== null) differ.push(f.previous_filename)
+    }
+    if (!differ.length) return null
+
+    const branch = `sync/stage-from-v${version}`
+    const { data: main } = await github.rest.git.getRef({ owner: OWNER, repo: name, ref: 'heads/main' })
+    try {
+      await github.rest.git.createRef({ owner: OWNER, repo: name, ref: `refs/heads/${branch}`, sha: main.object.sha })
+    } catch (err) {
+      if (err.status !== 422) throw err // 422: the branch exists from an earlier attempt
+    }
+    const open = await github.rest.pulls.list({ owner: OWNER, repo: name, head: `${OWNER}:${branch}`, base: 'stage', state: 'open' })
+    if (open.data[0]) return open.data[0]
+    const body = [
+      `\`main\` has changes that \`stage\` doesn't after v${version}, opened by [Release LMS](${runUrl}). Merge it so the next release from \`stage\` doesn't undo or conflict with them.`,
+      '',
+      `### Files that differ (${differ.length}${(cmp.files || []).length > 100 ? ', first 100 changed files checked' : ''})`,
+      ...differ.map((f) => `- \`${f}\``),
+      '',
+      'Squash-merge as usual. If GitHub reports conflicts, merge `stage` into this branch and resolve them there. Close it only if `stage` has deliberately replaced these changes.',
+    ].join('\n')
+    return (await github.rest.pulls.create({ owner: OWNER, repo: name, head: branch, base: 'stage', title: `Sync stage with main after v${version}`, body })).data
+  }
+
   const fail = async (s, at, reason, note, logs) => {
     s.status = 'failed'
     s.stoppedAt = at
@@ -375,9 +414,24 @@ module.exports = async ({ github, context, core }) => {
       await publish(s)
     }
 
+    // The release is out; a failure here only changes the note.
+    const syncs = []
+    for (const r of s.repos) {
+      try {
+        const pr = await syncStage(r.name, s.version)
+        if (pr) syncs.push(`<${pr.html_url}|${r.name} #${pr.number}>`)
+      } catch (err) {
+        core.warning(`${r.name}: couldn't open the stage sync PR: ${err.message}`)
+        syncs.push(`${r.name}: sync PR failed, compare main with stage by hand`)
+      }
+    }
+
     s.status = 'released'
     s.took = duration(Date.now() - started)
-    if (s.kind === 'hotfix') s.note = 'Make the same fix on stage (and develop if it applies) as separate PRs.'
+    s.note = [
+      syncs.length ? `main has changes stage doesn't: merge ${syncs.join(', ')} into stage.` : '',
+      s.kind === 'hotfix' ? 'Make the same fix on develop if it applies.' : '',
+    ].filter(Boolean).join(' ')
     await publish(s)
     save(s)
     return

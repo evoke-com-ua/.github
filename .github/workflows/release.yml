@@ -74,7 +74,7 @@ jobs:
           args=(--repo "$REPO" --target "$SHA" --title "$tag" --generate-notes)
           [[ -n "$previous" ]] && args+=(--notes-start-tag "$previous")
           [[ $kind == hotfix ]] &&
-            args+=(--notes "**Hotfix.** Make the same fix on \`stage\` (and on \`develop\` if it applies) as separate PRs.")
+            args+=(--notes "**Hotfix.** Release LMS opens a PR syncing it into \`stage\`; make the same fix on \`develop\` if it applies.")
 
           gh release create "$tag" "${args[@]}"
           echo "Released $tag at ${SHA:0:7} (notes since ${previous:-the beginning})."
